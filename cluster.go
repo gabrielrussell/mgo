@@ -531,9 +531,11 @@ func (cluster *mongoCluster) syncServersIteration(direct bool) {
 // AcquireSocket returns a socket to a server in the cluster.  If slaveOk is
 // true, it will attempt to return a socket to a slave server.  If it is
 // false, the socket will necessarily be to a master server.
-func (cluster *mongoCluster) AcquireSocket(slaveOk bool, syncTimeout time.Duration, socketTimeout time.Duration, serverTags []bson.D, poolLimit int) (s *mongoSocket, err error) {
-	var started time.Time
+func (cluster *mongoCluster) AcquireSocket(slaveOk bool, syncTimeout time.Duration, socketTimeout time.Duration, serverSelctionTimeout time.Duration, serverTags []bson.D, poolLimit int) (s *mongoSocket, err error) {
+	var syncStarted time.Time
+	var serverSelctionStarted time.Time
 	var syncCount uint
+	serverSelctionStarted = time.Now()
 	warnedLimit := false
 	for {
 		cluster.RLock()
@@ -544,11 +546,11 @@ func (cluster *mongoCluster) AcquireSocket(slaveOk bool, syncTimeout time.Durati
 			if ml > 0 || slaveOk && sl > 0 {
 				break
 			}
-			if started.IsZero() {
+			if syncStarted.IsZero() {
 				// Initialize after fast path above.
-				started = time.Now()
+				syncStarted = time.Now()
 				syncCount = cluster.syncCount
-			} else if syncTimeout != 0 && started.Before(time.Now().Add(-syncTimeout)) || cluster.failFast && cluster.syncCount != syncCount {
+			} else if syncTimeout != 0 && syncStarted.Before(time.Now().Add(-syncTimeout)) || cluster.failFast && cluster.syncCount != syncCount {
 				cluster.RUnlock()
 				return nil, errors.New("no reachable servers")
 			}
@@ -569,6 +571,9 @@ func (cluster *mongoCluster) AcquireSocket(slaveOk bool, syncTimeout time.Durati
 
 		if server == nil {
 			// Must have failed the requested tags. Sleep to avoid spinning.
+			if serverSelctionTimeout != 0 && serverSelctionStarted.Before(time.Now().Add(-serverSelctionTimeout)) {
+				return nil, errors.New("no qualifying servers")
+			}
 			time.Sleep(1e8)
 			continue
 		}

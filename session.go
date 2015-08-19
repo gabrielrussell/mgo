@@ -56,21 +56,22 @@ const (
 // need to be updated too.
 
 type Session struct {
-	m            sync.RWMutex
-	cluster_     *mongoCluster
-	slaveSocket  *mongoSocket
-	masterSocket *mongoSocket
-	slaveOk      bool
-	consistency  Mode
-	queryConfig  query
-	safeOp       *queryOp
-	syncTimeout  time.Duration
-	sockTimeout  time.Duration
-	defaultdb    string
-	sourcedb     string
-	dialCred     *Credential
-	creds        []Credential
-	poolLimit    int
+	m                      sync.RWMutex
+	cluster_               *mongoCluster
+	slaveSocket            *mongoSocket
+	masterSocket           *mongoSocket
+	slaveOk                bool
+	consistency            Mode
+	queryConfig            query
+	safeOp                 *queryOp
+	syncTimeout            time.Duration
+	sockTimeout            time.Duration
+	serverSelectionTimeout time.Duration
+	defaultdb              string
+	sourcedb               string
+	dialCred               *Credential
+	creds                  []Credential
+	poolLimit              int
 }
 
 type Database struct {
@@ -1546,6 +1547,16 @@ func (s *Session) SetCursorTimeout(d time.Duration) {
 	} else {
 		panic("SetCursorTimeout: only 0 (disable timeout) supported for now")
 	}
+	s.m.Unlock()
+}
+
+// SetServerSelectionTimeout sets the total time that will be spent looking for
+// qualifying servers. If SelectServers() has been called the serverSelectionTimeout
+// limits the amount of time waiting for a sever with the correct tags to come
+// available.
+func (s *Session) SetServerSelectionTimeout(d time.Duration) {
+	s.m.Lock()
+	s.serverSelectionTimeout = d
 	s.m.Unlock()
 }
 
@@ -3938,7 +3949,7 @@ func (s *Session) acquireSocket(slaveOk bool) (*mongoSocket, error) {
 	}
 
 	// Still not good.  We need a new socket.
-	sock, err := s.cluster().AcquireSocket(slaveOk && s.slaveOk, s.syncTimeout, s.sockTimeout, s.queryConfig.op.serverTags, s.poolLimit)
+	sock, err := s.cluster().AcquireSocket(slaveOk && s.slaveOk, s.syncTimeout, s.sockTimeout, s.serverSelectionTimeout, s.queryConfig.op.serverTags, s.poolLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -4188,7 +4199,7 @@ func (c *Collection) writeCommand(socket *mongoSocket, safeOp *queryOp, op inter
 	debugf("Write command result: %#v (err=%v)", result, err)
 	lerr = &LastError{
 		UpdatedExisting: result.N > 0 && len(result.Upserted) == 0,
-		N: result.N,
+		N:               result.N,
 	}
 	if len(result.Upserted) > 0 {
 		lerr.UpsertedId = result.Upserted[0].Id
