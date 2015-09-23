@@ -35,7 +35,7 @@ import (
 	"gopkg.in/mgo.v2/bson"
 )
 
-type replyFunc func(err error, reply *replyOp, docNum int, docData []byte)
+type replyFunc func(err error, reply *ReplyOp, docNum int, docData []byte)
 
 type mongoSocket struct {
 	sync.Mutex
@@ -65,7 +65,7 @@ const (
 	flagAwaitData
 )
 
-type queryOp struct {
+type QueryOp struct {
 	collection string
 	query      interface{}
 	skip       int32
@@ -91,7 +91,7 @@ type queryWrapper struct {
 	Comment        string      "$comment,omitempty"
 }
 
-func (op *queryOp) finalQuery(socket *mongoSocket) interface{} {
+func (op *QueryOp) finalQuery(socket *mongoSocket) interface{} {
 	if op.flags&flagSlaveOk != 0 && len(op.serverTags) > 0 && socket.ServerInfo().Mongos {
 		op.hasOptions = true
 		op.options.ReadPreference = bson.D{{"mode", "secondaryPreferred"}, {"tags", op.serverTags}}
@@ -109,40 +109,40 @@ func (op *queryOp) finalQuery(socket *mongoSocket) interface{} {
 	return op.query
 }
 
-type getMoreOp struct {
+type GetMoreOp struct {
 	collection string
 	limit      int32
 	cursorId   int64
 	replyFunc  replyFunc
 }
 
-type replyOp struct {
+type ReplyOp struct {
 	flags     uint32
 	cursorId  int64
 	firstDoc  int32
 	replyDocs int32
 }
 
-type insertOp struct {
+type InsertOp struct {
 	collection string        // "database.collection"
 	documents  []interface{} // One or more documents to insert
 	flags      uint32
 }
 
-type updateOp struct {
+type UpdateOp struct {
 	collection string // "database.collection"
 	selector   interface{}
 	update     interface{}
 	flags      uint32
 }
 
-type deleteOp struct {
+type DeleteOp struct {
 	collection string // "database.collection"
 	selector   interface{}
 	flags      uint32
 }
 
-type killCursorsOp struct {
+type KillCursorsOp struct {
 	cursorIds []int64
 }
 
@@ -316,17 +316,18 @@ func (socket *mongoSocket) kill(err error, abend bool) {
 	}
 }
 
-func (socket *mongoSocket) SimpleQuery(op *queryOp) (data []byte, err error) {
+func (socket *mongoSocket) SimpleQuery(op *QueryOp) (data []byte, replyOp *ReplyOp, err error) {
 	var wait, change sync.Mutex
 	var replyDone bool
 	var replyData []byte
 	var replyErr error
 	wait.Lock()
-	op.replyFunc = func(err error, reply *replyOp, docNum int, docData []byte) {
+	op.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
 		change.Lock()
 		if !replyDone {
 			replyDone = true
 			replyErr = err
+			replyOp = reply
 			if err == nil {
 				replyData = docData
 			}
@@ -336,14 +337,14 @@ func (socket *mongoSocket) SimpleQuery(op *queryOp) (data []byte, err error) {
 	}
 	err = socket.Query(op)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	wait.Lock()
 	change.Lock()
 	data = replyData
 	err = replyErr
 	change.Unlock()
-	return data, err
+	return data, replyOp, err
 }
 
 func (socket *mongoSocket) Query(ops ...interface{}) (err error) {
@@ -367,7 +368,7 @@ func (socket *mongoSocket) Query(ops ...interface{}) (err error) {
 		var replyFunc replyFunc
 		switch op := op.(type) {
 
-		case *updateOp:
+		case *UpdateOp:
 			buf = addHeader(buf, 2001)
 			buf = addInt32(buf, 0) // Reserved
 			buf = addCString(buf, op.collection)
@@ -383,7 +384,7 @@ func (socket *mongoSocket) Query(ops ...interface{}) (err error) {
 				return err
 			}
 
-		case *insertOp:
+		case *InsertOp:
 			buf = addHeader(buf, 2002)
 			buf = addInt32(buf, int32(op.flags))
 			buf = addCString(buf, op.collection)
@@ -395,7 +396,7 @@ func (socket *mongoSocket) Query(ops ...interface{}) (err error) {
 				}
 			}
 
-		case *queryOp:
+		case *QueryOp:
 			buf = addHeader(buf, 2004)
 			buf = addInt32(buf, int32(op.flags))
 			buf = addCString(buf, op.collection)
@@ -413,7 +414,7 @@ func (socket *mongoSocket) Query(ops ...interface{}) (err error) {
 			}
 			replyFunc = op.replyFunc
 
-		case *getMoreOp:
+		case *GetMoreOp:
 			buf = addHeader(buf, 2005)
 			buf = addInt32(buf, 0) // Reserved
 			buf = addCString(buf, op.collection)
@@ -421,7 +422,7 @@ func (socket *mongoSocket) Query(ops ...interface{}) (err error) {
 			buf = addInt64(buf, op.cursorId)
 			replyFunc = op.replyFunc
 
-		case *deleteOp:
+		case *DeleteOp:
 			buf = addHeader(buf, 2006)
 			buf = addInt32(buf, 0) // Reserved
 			buf = addCString(buf, op.collection)
@@ -432,7 +433,7 @@ func (socket *mongoSocket) Query(ops ...interface{}) (err error) {
 				return err
 			}
 
-		case *killCursorsOp:
+		case *KillCursorsOp:
 			buf = addHeader(buf, 2007)
 			buf = addInt32(buf, 0) // Reserved
 			buf = addInt32(buf, int32(len(op.cursorIds)))
@@ -539,7 +540,7 @@ func (socket *mongoSocket) readLoop() {
 			return
 		}
 
-		reply := replyOp{
+		reply := ReplyOp{
 			flags:     uint32(getInt32(p, 16)),
 			cursorId:  getInt64(p, 20),
 			firstDoc:  getInt32(p, 28),

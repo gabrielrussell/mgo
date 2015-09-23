@@ -63,7 +63,7 @@ type Session struct {
 	slaveOk      bool
 	consistency  mode
 	queryConfig  query
-	safeOp       *queryOp
+	safeOp       *QueryOp
 	syncTimeout  time.Duration
 	sockTimeout  time.Duration
 	defaultdb    string
@@ -91,7 +91,7 @@ type Query struct {
 }
 
 type query struct {
-	op       queryOp
+	op       QueryOp
 	prefetch float64
 	limit    int32
 }
@@ -111,7 +111,7 @@ type Iter struct {
 	server         *mongoServer
 	docData        queue
 	err            error
-	op             getMoreOp
+	op             GetMoreOp
 	prefetch       float64
 	limit          int32
 	docsToReceive  int
@@ -613,7 +613,83 @@ func (db *Database) Run(cmd interface{}, result interface{}) error {
 	defer socket.Release()
 
 	// This is an optimized form of db.C("$cmd").Find(cmd).One(result).
+	_, err = db.run(socket, cmd, result)
+	return err
+}
+
+func (db *Database) QueryOp(cmd interface{}, result interface{}) (ReplyOp, error) {
+	socket, err := db.Session.acquireSocket(true)
+	if err != nil {
+		return err
+	}
+	defer socket.Release()
+
+	// This is an optimized form of db.C("$cmd").Find(cmd).One(result).
 	return db.run(socket, cmd, result)
+}
+
+func (db *Database) GetMoreOp(collection string, limit int32, cursorId int64, cursorId, result interface{}) (ReplyOp, error) {
+	var wait, change sync.Mutex
+	var replyDone bool
+	var replyData []byte
+	var replyErr error
+	socket, err := db.Session.acquireSocket(true)
+	if err != nil {
+		return err
+	}
+	defer socket.Release()
+
+	wait.Lock()
+
+	op := GetMoreOp{
+		collection: collection,
+		limit:      limit,
+		cursorId:   cursorId,
+	}
+	replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+	}
+	socket.Query(op)
+}
+
+func (socket *mongoSocket) SimpleQuery(op *QueryOp) (data []byte, replyOp *ReplyOp, err error) {
+	var wait, change sync.Mutex
+	var replyDone bool
+	var replyData []byte
+	var replyErr error
+	wait.Lock()
+	op.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+		change.Lock()
+		if !replyDone {
+			replyDone = true
+			replyErr = err
+			replyOp = reply
+			if err == nil {
+				replyData = docData
+			}
+		}
+		change.Unlock()
+		wait.Unlock()
+	}
+	err = socket.Query(op)
+	if err != nil {
+		return nil, nil, err
+	}
+	wait.Lock()
+	change.Lock()
+	data = replyData
+	err = replyErr
+	change.Unlock()
+	return data, replyOp, err
+}
+
+func (db *Database) KillCursorsOp(cursorIds []int64, result interface{}) (ReplyOp, error) {
+	socket, err := db.Session.acquireSocket(true)
+	if err != nil {
+		return err
+	}
+	defer socket.Release()
+
+	op := &KillCursorsOp{cursorIds}
 }
 
 // Credential holds details to authenticate with a MongoDB server.
@@ -1763,7 +1839,7 @@ func (s *Session) ensureSafe(safe *Safe) {
 			cmd.J = true
 		}
 	}
-	s.safeOp = &queryOp{
+	s.safeOp = &QueryOp{
 		query:      &cmd,
 		collection: "admin.$cmd",
 		limit:      -1,
@@ -2213,7 +2289,7 @@ func IsDup(err error) bool {
 // happens while inserting the provided documents, the returned error will
 // be of type *LastError.
 func (c *Collection) Insert(docs ...interface{}) error {
-	_, err := c.writeQuery(&insertOp{c.FullName, docs, 0})
+	_, err := c.writeQuery(&InsertOp{c.FullName, docs, 0})
 	return err
 }
 
@@ -2229,7 +2305,7 @@ func (c *Collection) Insert(docs ...interface{}) error {
 //     http://www.mongodb.org/display/DOCS/Atomic+Operations
 //
 func (c *Collection) Update(selector interface{}, update interface{}) error {
-	lerr, err := c.writeQuery(&updateOp{c.FullName, selector, update, 0})
+	lerr, err := c.writeQuery(&UpdateOp{c.FullName, selector, update, 0})
 	if err == nil && lerr != nil && !lerr.UpdatedExisting {
 		return ErrNotFound
 	}
@@ -2265,7 +2341,7 @@ type ChangeInfo struct {
 //     http://www.mongodb.org/display/DOCS/Atomic+Operations
 //
 func (c *Collection) UpdateAll(selector interface{}, update interface{}) (info *ChangeInfo, err error) {
-	lerr, err := c.writeQuery(&updateOp{c.FullName, selector, update, 2})
+	lerr, err := c.writeQuery(&UpdateOp{c.FullName, selector, update, 2})
 	if err == nil && lerr != nil {
 		info = &ChangeInfo{Updated: lerr.N}
 	}
@@ -2286,7 +2362,7 @@ func (c *Collection) UpdateAll(selector interface{}, update interface{}) (info *
 //     http://www.mongodb.org/display/DOCS/Atomic+Operations
 //
 func (c *Collection) Upsert(selector interface{}, update interface{}) (info *ChangeInfo, err error) {
-	lerr, err := c.writeQuery(&updateOp{c.FullName, selector, update, 1})
+	lerr, err := c.writeQuery(&UpdateOp{c.FullName, selector, update, 1})
 	if err == nil && lerr != nil {
 		info = &ChangeInfo{}
 		if lerr.UpdatedExisting {
@@ -2318,7 +2394,7 @@ func (c *Collection) UpsertId(id interface{}, update interface{}) (info *ChangeI
 //     http://www.mongodb.org/display/DOCS/Removing
 //
 func (c *Collection) Remove(selector interface{}) error {
-	lerr, err := c.writeQuery(&deleteOp{c.FullName, selector, 1})
+	lerr, err := c.writeQuery(&DeleteOp{c.FullName, selector, 1})
 	if err == nil && lerr != nil && lerr.N == 0 {
 		return ErrNotFound
 	}
@@ -2344,7 +2420,7 @@ func (c *Collection) RemoveId(id interface{}) error {
 //     http://www.mongodb.org/display/DOCS/Removing
 //
 func (c *Collection) RemoveAll(selector interface{}) (info *ChangeInfo, err error) {
-	lerr, err := c.writeQuery(&deleteOp{c.FullName, selector, 0})
+	lerr, err := c.writeQuery(&DeleteOp{c.FullName, selector, 0})
 	if err == nil && lerr != nil {
 		info = &ChangeInfo{Removed: lerr.N}
 	}
@@ -2792,7 +2868,7 @@ func (q *Query) One(result interface{}) (err error) {
 	op.flags |= session.slaveOkFlag()
 	op.limit = -1
 
-	data, err := socket.SimpleQuery(&op)
+	data, _, err := socket.SimpleQuery(&op)
 	if err != nil {
 		return err
 	}
@@ -2814,7 +2890,7 @@ func (q *Query) One(result interface{}) (err error) {
 // run duplicates the behavior of collection.Find(query).One(&result)
 // as performed by Database.Run, specializing the logic for running
 // database commands on a given socket.
-func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (err error) {
+func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (replyOp *ReplyOp, err error) {
 	// Database.Run:
 	if name, ok := cmd.(string); ok {
 		cmd = bson.D{{name, 1}}
@@ -2832,12 +2908,12 @@ func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (err error
 	op.flags |= session.slaveOkFlag()
 	op.limit = -1
 
-	data, err := socket.SimpleQuery(&op)
+	data, replyOp, err := socket.SimpleQuery(&op)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if data == nil {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
 	if result != nil {
 		err = bson.Unmarshal(data, result)
@@ -2847,10 +2923,10 @@ func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (err error
 			debugf("Run command unmarshaled: %#v, result: %#v", op, res)
 		} else {
 			debugf("Run command unmarshaling failed: %#v", op, err)
-			return err
+			return nil, err
 		}
 	}
-	return checkQueryError(op.collection, data)
+	return replyOp, checkQueryError(op.collection, data)
 }
 
 // The DBRef type implements support for the database reference MongoDB
@@ -3178,7 +3254,7 @@ func (iter *Iter) Close() error {
 	socket, err := iter.acquireSocket()
 	if err == nil {
 		// TODO Batch kills.
-		err = socket.Query(&killCursorsOp{[]int64{cursorId}})
+		err = socket.Query(&KillCursorsOp{[]int64{cursorId}})
 		socket.Release()
 	}
 
@@ -3995,7 +4071,7 @@ func (s *Session) unsetSocket() {
 }
 
 func (iter *Iter) replyFunc() replyFunc {
-	return func(err error, op *replyOp, docNum int, docData []byte) {
+	return func(err error, op *ReplyOp, docNum int, docData []byte) {
 		iter.m.Lock()
 		iter.docsToReceive--
 		if err != nil {
@@ -4074,7 +4150,7 @@ func (c *Collection) writeQuery(op interface{}) (lerr *LastError, err error) {
 	// TODO Enable this path for wire version 2 as well.
 	if socket.ServerInfo().MaxWireVersion >= 3 {
 		// Servers with a more recent write protocol benefit from write commands.
-		if op, ok := op.(*insertOp); ok && len(op.documents) > 1000 {
+		if op, ok := op.(*InsertOp); ok && len(op.documents) > 1000 {
 			var firstErr error
 			// Maximum batch size is 1000. Must split out in separate operations for compatibility.
 			all := op.documents
@@ -4110,7 +4186,7 @@ func (c *Collection) writeQuery(op interface{}) (lerr *LastError, err error) {
 	mutex.Lock()
 	query := *safeOp // Copy the data.
 	query.collection = dbname + ".$cmd"
-	query.replyFunc = func(err error, reply *replyOp, docNum int, docData []byte) {
+	query.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
 		replyData = docData
 		replyErr = err
 		mutex.Unlock()
@@ -4139,7 +4215,7 @@ func (c *Collection) writeQuery(op interface{}) (lerr *LastError, err error) {
 	return result, nil
 }
 
-func (c *Collection) writeCommand(socket *mongoSocket, safeOp *queryOp, op interface{}) (lerr *LastError, err error) {
+func (c *Collection) writeCommand(socket *mongoSocket, safeOp *QueryOp, op interface{}) (lerr *LastError, err error) {
 	var writeConcern interface{}
 	if safeOp == nil {
 		writeConcern = bson.D{{"w", 0}}
@@ -4149,7 +4225,7 @@ func (c *Collection) writeCommand(socket *mongoSocket, safeOp *queryOp, op inter
 
 	var cmd bson.D
 	switch op := op.(type) {
-	case *insertOp:
+	case *InsertOp:
 		// http://docs.mongodb.org/manual/reference/command/insert
 		cmd = bson.D{
 			{"insert", c.Name},
@@ -4157,7 +4233,7 @@ func (c *Collection) writeCommand(socket *mongoSocket, safeOp *queryOp, op inter
 			{"writeConcern", writeConcern},
 			{"ordered", op.flags&1 == 0},
 		}
-	case *updateOp:
+	case *UpdateOp:
 		// http://docs.mongodb.org/manual/reference/command/update
 		selector := op.selector
 		if selector == nil {
@@ -4169,7 +4245,7 @@ func (c *Collection) writeCommand(socket *mongoSocket, safeOp *queryOp, op inter
 			{"writeConcern", writeConcern},
 			//{"ordered", <bool>},
 		}
-	case *deleteOp:
+	case *DeleteOp:
 		// http://docs.mongodb.org/manual/reference/command/delete
 		selector := op.selector
 		if selector == nil {
@@ -4184,11 +4260,11 @@ func (c *Collection) writeCommand(socket *mongoSocket, safeOp *queryOp, op inter
 	}
 
 	var result writeCmdResult
-	err = c.Database.run(socket, cmd, &result)
+	_, err = c.Database.run(socket, cmd, &result)
 	debugf("Write command result: %#v (err=%v)", result, err)
 	lerr = &LastError{
 		UpdatedExisting: result.N > 0 && len(result.Upserted) == 0,
-		N: result.N,
+		N:               result.N,
 	}
 	if len(result.Upserted) > 0 {
 		lerr.UpsertedId = result.Upserted[0].Id

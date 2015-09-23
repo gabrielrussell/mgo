@@ -286,7 +286,7 @@ func (server *mongoServer) pinger(loop bool) {
 	} else {
 		delay = pingDelay
 	}
-	op := queryOp{
+	op := QueryOp{
 		collection: "admin.$cmd",
 		query:      bson.D{{"ping", 1}},
 		flags:      flagSlaveOk,
@@ -300,7 +300,7 @@ func (server *mongoServer) pinger(loop bool) {
 		socket, _, err := server.AcquireSocket(0, 3*delay)
 		if err == nil {
 			start := time.Now()
-			_, _ = socket.SimpleQuery(&op)
+			_, _, _ = socket.SimpleQuery(&op)
 			delay := time.Now().Sub(start)
 
 			server.pingWindow[server.pingIndex] = delay
