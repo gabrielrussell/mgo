@@ -617,18 +617,20 @@ func (db *Database) Run(cmd interface{}, result interface{}) error {
 	return err
 }
 
-func (db *Database) QueryOp(cmd interface{}, result interface{}) (ReplyOp, error) {
+// I can't remember why I thought I needed this. Oh yea, it's because SimpleQuery is not public
+func (db *Database) QueryOp(op *QueryOp) (data []byte, replyOp *ReplyOp, err error) {
 	socket, err := db.Session.acquireSocket(true)
 	if err != nil {
 		return err
 	}
 	defer socket.Release()
 
-	// This is an optimized form of db.C("$cmd").Find(cmd).One(result).
-	return db.run(socket, cmd, result)
+	return socket.SimpleQuery(op)
 }
 
-func (db *Database) GetMoreOp(collection string, limit int32, cursorId int64, cursorId, result interface{}) (ReplyOp, error) {
+func (db *Database) GetMoreOp(collection string, limit int32, cursorId int64) (data []byte, replyOp *ReplyOp, err error) {
+	// I REALLY don't understand this double mutex that Gustavo did. My assumption that you need
+	// two locks for the rece detector to approve of the function.
 	var wait, change sync.Mutex
 	var replyDone bool
 	var replyData []byte
@@ -646,9 +648,29 @@ func (db *Database) GetMoreOp(collection string, limit int32, cursorId int64, cu
 		limit:      limit,
 		cursorId:   cursorId,
 	}
-	replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+	op.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+		change.Lock()
+		if !replyDone {
+			replyDone = true
+			replyErr = err
+			replyOp = reply
+			if err == nil {
+				replyData = docData
+			}
+		}
+		change.Unlock()
+		wait.Unlock()
 	}
-	socket.Query(op)
+	err = socket.Query(op)
+	if err != nil {
+		return nil, nil, err
+	}
+	wait.Lock()
+	change.Lock()
+	data = replyData
+	err = replyErr
+	change.Unlock()
+	return data, replyOp, err
 }
 
 func (socket *mongoSocket) SimpleQuery(op *QueryOp) (data []byte, replyOp *ReplyOp, err error) {
