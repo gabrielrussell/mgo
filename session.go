@@ -673,37 +673,6 @@ func (db *Database) GetMoreOp(collection string, limit int32, cursorId int64) (d
 	return data, replyOp, err
 }
 
-func (socket *mongoSocket) SimpleQuery(op *QueryOp) (data []byte, replyOp *ReplyOp, err error) {
-	var wait, change sync.Mutex
-	var replyDone bool
-	var replyData []byte
-	var replyErr error
-	wait.Lock()
-	op.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
-		change.Lock()
-		if !replyDone {
-			replyDone = true
-			replyErr = err
-			replyOp = reply
-			if err == nil {
-				replyData = docData
-			}
-		}
-		change.Unlock()
-		wait.Unlock()
-	}
-	err = socket.Query(op)
-	if err != nil {
-		return nil, nil, err
-	}
-	wait.Lock()
-	change.Lock()
-	data = replyData
-	err = replyErr
-	change.Unlock()
-	return data, replyOp, err
-}
-
 func (db *Database) KillCursorsOp(cursorIds []int64, result interface{}) (ReplyOp, error) {
 	socket, err := db.Session.acquireSocket(true)
 	if err != nil {
@@ -712,6 +681,10 @@ func (db *Database) KillCursorsOp(cursorIds []int64, result interface{}) (ReplyO
 	defer socket.Release()
 
 	op := &KillCursorsOp{cursorIds}
+	err = socket.Query(op)
+	if err != nil {
+		return nil, nil, err
+	}
 }
 
 // Credential holds details to authenticate with a MongoDB server.
@@ -2648,8 +2621,8 @@ func (q *Query) Sort(fields ...string) *Query {
 			order = append(order, bson.DocElem{field, n})
 		}
 	}
-	q.op.options.OrderBy = order
-	q.op.hasOptions = true
+	q.op.Options.OrderBy = order
+	q.op.HasOptions = true
 	q.m.Unlock()
 	return q
 }
@@ -2676,8 +2649,8 @@ func (q *Query) Explain(result interface{}) error {
 	q.m.Lock()
 	clone := &Query{session: q.session, query: q.query}
 	q.m.Unlock()
-	clone.op.options.Explain = true
-	clone.op.hasOptions = true
+	clone.op.Options.Explain = true
+	clone.op.HasOptions = true
 	if clone.op.limit > 0 {
 		clone.op.limit = -q.op.limit
 	}
@@ -2707,8 +2680,8 @@ func (q *Query) Explain(result interface{}) error {
 func (q *Query) Hint(indexKey ...string) *Query {
 	q.m.Lock()
 	keyInfo, err := parseIndexKey(indexKey)
-	q.op.options.Hint = keyInfo.key
-	q.op.hasOptions = true
+	q.op.Options.Hint = keyInfo.key
+	q.op.HasOptions = true
 	q.m.Unlock()
 	if err != nil {
 		panic(err)
@@ -2723,8 +2696,8 @@ func (q *Query) Hint(indexKey ...string) *Query {
 // queries from disrupting performance by scanning through too much data.
 func (q *Query) SetMaxScan(n int) *Query {
 	q.m.Lock()
-	q.op.options.MaxScan = n
-	q.op.hasOptions = true
+	q.op.Options.MaxScan = n
+	q.op.HasOptions = true
 	q.m.Unlock()
 	return q
 }
@@ -2762,7 +2735,7 @@ func (q *Query) SetMaxScan(n int) *Query {
 func (q *Query) SetMaxTime(d time.Duration) *Query {
 	q.m.Lock()
 	q.op.options.MaxTimeMS = int(d / time.Millisecond)
-	q.op.hasOptions = true
+	q.op.HasOptions = true
 	q.m.Unlock()
 	return q
 }

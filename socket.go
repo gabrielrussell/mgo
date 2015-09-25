@@ -54,10 +54,10 @@ type mongoSocket struct {
 	serverInfo    *mongoServerInfo
 }
 
-type queryOpFlags uint32
+type QueryOpFlags uint32
 
 const (
-	_ queryOpFlags = 1 << iota
+	_ QueryOpFlags = 1 << iota
 	flagTailable
 	flagSlaveOk
 	flagLogReplay
@@ -66,20 +66,20 @@ const (
 )
 
 type QueryOp struct {
-	collection string
-	query      interface{}
-	skip       int32
-	limit      int32
-	selector   interface{}
-	flags      queryOpFlags
-	replyFunc  replyFunc
+	Collection string
+	Query      interface{}
+	Skip       int32
+	Limit      int32
+	Selector   interface{}
+	Flags      QueryOpFlags
+	ReplyFunc  replyFunc
 
-	options    queryWrapper
-	hasOptions bool
-	serverTags []bson.D
+	Options    QueryWrapper
+	HasOptions bool
+	ServerTags []bson.D
 }
 
-type queryWrapper struct {
+type QueryWrapper struct {
 	Query          interface{} "$query"
 	OrderBy        interface{} "$orderby,omitempty"
 	Hint           interface{} "$hint,omitempty"
@@ -93,10 +93,10 @@ type queryWrapper struct {
 
 func (op *QueryOp) finalQuery(socket *mongoSocket) interface{} {
 	if op.flags&flagSlaveOk != 0 && len(op.serverTags) > 0 && socket.ServerInfo().Mongos {
-		op.hasOptions = true
-		op.options.ReadPreference = bson.D{{"mode", "secondaryPreferred"}, {"tags", op.serverTags}}
+		op.HasOptions = true
+		op.Options.ReadPreference = bson.D{{"mode", "secondaryPreferred"}, {"tags", op.serverTags}}
 	}
-	if op.hasOptions {
+	if op.HasOptions {
 		if op.query == nil {
 			var empty bson.D
 			op.options.Query = empty
