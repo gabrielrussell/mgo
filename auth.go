@@ -115,10 +115,10 @@ func (socket *mongoSocket) getNonce() (nonce string, err error) {
 func (socket *mongoSocket) resetNonce() {
 	debugf("Socket %p to %s: requesting a new nonce", socket, socket.addr)
 	op := &QueryOp{}
-	op.query = &getNonceCmd{GetNonce: 1}
-	op.collection = "admin.$cmd"
-	op.limit = -1
-	op.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+	op.Query = &getNonceCmd{GetNonce: 1}
+	op.Collection = "admin.$cmd"
+	op.Limit = -1
+	op.ReplyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
 		if err != nil {
 			socket.kill(errors.New("getNonce: "+err.Error()), true)
 			return
@@ -378,10 +378,10 @@ func (socket *mongoSocket) loginRun(db string, query, result interface{}, f func
 	mutex.Lock()
 
 	op := QueryOp{}
-	op.query = query
-	op.collection = db + ".$cmd"
-	op.limit = -1
-	op.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+	op.Query = query
+	op.Collection = db + ".$cmd"
+	op.Limit = -1
+	op.ReplyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
 		defer mutex.Unlock()
 
 		if err != nil {
@@ -433,9 +433,9 @@ func (socket *mongoSocket) flushLogout() (ops []interface{}) {
 		debugf("Socket %p to %s: logout all (flushing %d)", socket, socket.addr, l)
 		for i := 0; i != l; i++ {
 			op := QueryOp{}
-			op.query = &logoutCmd{1}
-			op.collection = socket.logout[i].Source + ".$cmd"
-			op.limit = -1
+			op.Query = &logoutCmd{1}
+			op.Collection = socket.logout[i].Source + ".$cmd"
+			op.Limit = -1
 			ops = append(ops, &op)
 		}
 		socket.logout = socket.logout[0:0]

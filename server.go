@@ -287,10 +287,10 @@ func (server *mongoServer) pinger(loop bool) {
 		delay = pingDelay
 	}
 	op := QueryOp{
-		collection: "admin.$cmd",
-		query:      bson.D{{"ping", 1}},
-		flags:      flagSlaveOk,
-		limit:      -1,
+		Collection: "admin.$cmd",
+		Query:      bson.D{{"ping", 1}},
+		Flags:      flagSlaveOk,
+		Limit:      -1,
 	}
 	for {
 		if loop {

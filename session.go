@@ -621,7 +621,7 @@ func (db *Database) Run(cmd interface{}, result interface{}) error {
 func (db *Database) QueryOp(op *QueryOp) (data []byte, replyOp *ReplyOp, err error) {
 	socket, err := db.Session.acquireSocket(true)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	defer socket.Release()
 
@@ -637,7 +637,7 @@ func (db *Database) GetMoreOp(collection string, limit int32, cursorId int64) (d
 	var replyErr error
 	socket, err := db.Session.acquireSocket(true)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	defer socket.Release()
 
@@ -673,7 +673,7 @@ func (db *Database) GetMoreOp(collection string, limit int32, cursorId int64) (d
 	return data, replyOp, err
 }
 
-func (db *Database) KillCursorsOp(cursorIds []int64, result interface{}) (ReplyOp, error) {
+func (db *Database) KillCursorsOp(cursorIds []int64, result interface{}) error {
 	socket, err := db.Session.acquireSocket(true)
 	if err != nil {
 		return err
@@ -683,8 +683,9 @@ func (db *Database) KillCursorsOp(cursorIds []int64, result interface{}) (ReplyO
 	op := &KillCursorsOp{cursorIds}
 	err = socket.Query(op)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
+	return nil
 }
 
 // Credential holds details to authenticate with a MongoDB server.
@@ -1356,7 +1357,7 @@ func (c *Collection) Indexes() (indexes []Index, err error) {
 	cloned.SetMode(Monotonic, false)
 	defer cloned.Close()
 
-	batchSize := int(cloned.queryConfig.op.limit)
+	batchSize := int(cloned.queryConfig.op.Limit)
 
 	// Try with a command.
 	var result struct {
@@ -1613,7 +1614,7 @@ func (s *Session) SetSocketTimeout(d time.Duration) {
 func (s *Session) SetCursorTimeout(d time.Duration) {
 	s.m.Lock()
 	if d == 0 {
-		s.queryConfig.op.flags |= flagNoCursorTimeout
+		s.queryConfig.op.Flags |= flagNoCursorTimeout
 	} else {
 		panic("SetCursorTimeout: only 0 (disable timeout) supported for now")
 	}
@@ -1648,7 +1649,7 @@ func (s *Session) SetBatch(n int) {
 		n = 2
 	}
 	s.m.Lock()
-	s.queryConfig.op.limit = int32(n)
+	s.queryConfig.op.Limit = int32(n)
 	s.m.Unlock()
 }
 
@@ -1685,7 +1686,7 @@ func (s *Session) Safe() (safe *Safe) {
 	s.m.Lock()
 	defer s.m.Unlock()
 	if s.safeOp != nil {
-		cmd := s.safeOp.query.(*getLastError)
+		cmd := s.safeOp.Query.(*getLastError)
 		safe = &Safe{WTimeout: cmd.WTimeout, FSync: cmd.FSync, J: cmd.J}
 		switch w := cmd.W.(type) {
 		case string:
@@ -1816,7 +1817,7 @@ func (s *Session) ensureSafe(safe *Safe) {
 		cmd = getLastError{1, w, safe.WTimeout, safe.FSync, safe.J}
 	} else {
 		// Copy.  We don't want to mutate the existing query.
-		cmd = *(s.safeOp.query.(*getLastError))
+		cmd = *(s.safeOp.Query.(*getLastError))
 		if cmd.W == nil {
 			cmd.W = w
 		} else if safe.WMode != "" {
@@ -1835,9 +1836,9 @@ func (s *Session) ensureSafe(safe *Safe) {
 		}
 	}
 	s.safeOp = &QueryOp{
-		query:      &cmd,
-		collection: "admin.$cmd",
-		limit:      -1,
+		Query:      &cmd,
+		Collection: "admin.$cmd",
+		Limit:      -1,
 	}
 }
 
@@ -1886,7 +1887,7 @@ func (s *Session) Run(cmd interface{}, result interface{}) error {
 //
 func (s *Session) SelectServers(tags ...bson.D) {
 	s.m.Lock()
-	s.queryConfig.op.serverTags = tags
+	s.queryConfig.op.ServerTags = tags
 	s.m.Unlock()
 }
 
@@ -1963,8 +1964,8 @@ func (c *Collection) Find(query interface{}) *Query {
 	session.m.RLock()
 	q := &Query{session: session, query: session.queryConfig}
 	session.m.RUnlock()
-	q.op.query = query
-	q.op.collection = c.FullName
+	q.op.Query = query
+	q.op.Collection = c.FullName
 	return q
 }
 
@@ -1992,7 +1993,7 @@ func (c *Collection) Repair() *Iter {
 	cloned.SetMode(Monotonic, false)
 	defer cloned.Close()
 
-	batchSize := int(cloned.queryConfig.op.limit)
+	batchSize := int(cloned.queryConfig.op.Limit)
 
 	var result struct {
 		Cursor struct {
@@ -2057,7 +2058,7 @@ type pipeCmdCursor struct {
 func (c *Collection) Pipe(pipeline interface{}) *Pipe {
 	session := c.Database.Session
 	session.m.RLock()
-	batchSize := int(session.queryConfig.op.limit)
+	batchSize := int(session.queryConfig.op.Limit)
 	session.m.RUnlock()
 	return &Pipe{
 		session:    session,
@@ -2504,7 +2505,7 @@ func (q *Query) Batch(n int) *Query {
 		n = 2
 	}
 	q.m.Lock()
-	q.op.limit = int32(n)
+	q.op.Limit = int32(n)
 	q.m.Unlock()
 	return q
 }
@@ -2532,7 +2533,7 @@ func (q *Query) Prefetch(p float64) *Query {
 // ordered by insertion time, or with sorted results.
 func (q *Query) Skip(n int) *Query {
 	q.m.Lock()
-	q.op.skip = int32(n)
+	q.op.Skip = int32(n)
 	q.m.Unlock()
 	return q
 }
@@ -2545,16 +2546,16 @@ func (q *Query) Limit(n int) *Query {
 	switch {
 	case n == 1:
 		q.limit = 1
-		q.op.limit = -1
+		q.op.Limit = -1
 	case n == math.MinInt32: // -MinInt32 == -MinInt32
 		q.limit = math.MaxInt32
-		q.op.limit = math.MinInt32 + 1
+		q.op.Limit = math.MinInt32 + 1
 	case n < 0:
 		q.limit = int32(-n)
-		q.op.limit = int32(n)
+		q.op.Limit = int32(n)
 	default:
 		q.limit = int32(n)
-		q.op.limit = int32(n)
+		q.op.Limit = int32(n)
 	}
 	q.m.Unlock()
 	return q
@@ -2571,7 +2572,7 @@ func (q *Query) Limit(n int) *Query {
 //
 func (q *Query) Select(selector interface{}) *Query {
 	q.m.Lock()
-	q.op.selector = selector
+	q.op.Selector = selector
 	q.m.Unlock()
 	return q
 }
@@ -2651,8 +2652,8 @@ func (q *Query) Explain(result interface{}) error {
 	q.m.Unlock()
 	clone.op.Options.Explain = true
 	clone.op.HasOptions = true
-	if clone.op.limit > 0 {
-		clone.op.limit = -q.op.limit
+	if clone.op.Limit > 0 {
+		clone.op.Limit = -q.op.Limit
 	}
 	iter := clone.Iter()
 	if iter.Next(result) {
@@ -2734,7 +2735,7 @@ func (q *Query) SetMaxScan(n int) *Query {
 //
 func (q *Query) SetMaxTime(d time.Duration) *Query {
 	q.m.Lock()
-	q.op.options.MaxTimeMS = int(d / time.Millisecond)
+	q.op.Options.MaxTimeMS = int(d / time.Millisecond)
 	q.op.HasOptions = true
 	q.m.Unlock()
 	return q
@@ -2765,8 +2766,8 @@ func (q *Query) SetMaxTime(d time.Duration) *Query {
 //
 func (q *Query) Snapshot() *Query {
 	q.m.Lock()
-	q.op.options.Snapshot = true
-	q.op.hasOptions = true
+	q.op.Options.Snapshot = true
+	q.op.HasOptions = true
 	q.m.Unlock()
 	return q
 }
@@ -2781,8 +2782,8 @@ func (q *Query) Snapshot() *Query {
 //
 func (q *Query) Comment(comment string) *Query {
 	q.m.Lock()
-	q.op.options.Comment = comment
-	q.op.hasOptions = true
+	q.op.Options.Comment = comment
+	q.op.HasOptions = true
 	q.m.Unlock()
 	return q
 }
@@ -2793,7 +2794,7 @@ func (q *Query) Comment(comment string) *Query {
 // It has seen at least one use case, though, so it's exposed via the API.
 func (q *Query) LogReplay() *Query {
 	q.m.Lock()
-	q.op.flags |= flagLogReplay
+	q.op.Flags |= flagLogReplay
 	q.m.Unlock()
 	return q
 }
@@ -2860,8 +2861,8 @@ func (q *Query) One(result interface{}) (err error) {
 	}
 	defer socket.Release()
 
-	op.flags |= session.slaveOkFlag()
-	op.limit = -1
+	op.Flags |= session.slaveOkFlag()
+	op.Limit = -1
 
 	data, _, err := socket.SimpleQuery(&op)
 	if err != nil {
@@ -2879,7 +2880,7 @@ func (q *Query) One(result interface{}) (err error) {
 			return err
 		}
 	}
-	return checkQueryError(op.collection, data)
+	return checkQueryError(op.Collection, data)
 }
 
 // run duplicates the behavior of collection.Find(query).One(&result)
@@ -2896,12 +2897,12 @@ func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (replyOp *
 	session.m.RLock()
 	op := session.queryConfig.op // Copy.
 	session.m.RUnlock()
-	op.query = cmd
-	op.collection = db.Name + ".$cmd"
+	op.Query = cmd
+	op.Collection = db.Name + ".$cmd"
 
 	// Query.One:
-	op.flags |= session.slaveOkFlag()
-	op.limit = -1
+	op.Flags |= session.slaveOkFlag()
+	op.Limit = -1
 
 	data, replyOp, err := socket.SimpleQuery(&op)
 	if err != nil {
@@ -2921,7 +2922,7 @@ func (db *Database) run(socket *mongoSocket, cmd, result interface{}) (replyOp *
 			return nil, err
 		}
 	}
-	return replyOp, checkQueryError(op.collection, data)
+	return replyOp, checkQueryError(op.Collection, data)
 }
 
 // The DBRef type implements support for the database reference MongoDB
@@ -2992,7 +2993,7 @@ func (db *Database) CollectionNames() (names []string, err error) {
 	cloned.SetMode(Monotonic, false)
 	defer cloned.Close()
 
-	batchSize := int(cloned.queryConfig.op.limit)
+	batchSize := int(cloned.queryConfig.op.Limit)
 
 	// Try with a command.
 	var result struct {
@@ -3089,12 +3090,12 @@ func (q *Query) Iter() *Iter {
 		timeout:  -1,
 	}
 	iter.gotReply.L = &iter.m
-	iter.op.collection = op.collection
-	iter.op.limit = op.limit
+	iter.op.collection = op.Collection
+	iter.op.limit = op.Limit
 	iter.op.replyFunc = iter.replyFunc()
 	iter.docsToReceive++
-	op.replyFunc = iter.op.replyFunc
-	op.flags |= session.slaveOkFlag()
+	op.ReplyFunc = iter.op.replyFunc
+	op.Flags |= session.slaveOkFlag()
 
 	socket, err := session.acquireSocket(true)
 	if err != nil {
@@ -3170,12 +3171,12 @@ func (q *Query) Tail(timeout time.Duration) *Iter {
 	iter := &Iter{session: session, prefetch: prefetch}
 	iter.gotReply.L = &iter.m
 	iter.timeout = timeout
-	iter.op.collection = op.collection
-	iter.op.limit = op.limit
+	iter.op.collection = op.Collection
+	iter.op.limit = op.Limit
 	iter.op.replyFunc = iter.replyFunc()
 	iter.docsToReceive++
-	op.replyFunc = iter.op.replyFunc
-	op.flags |= flagTailable | flagAwaitData | session.slaveOkFlag()
+	op.ReplyFunc = iter.op.replyFunc
+	op.Flags |= flagTailable | flagAwaitData | session.slaveOkFlag()
 
 	socket, err := session.acquireSocket(true)
 	if err != nil {
@@ -3194,7 +3195,7 @@ func (q *Query) Tail(timeout time.Duration) *Iter {
 	return iter
 }
 
-func (s *Session) slaveOkFlag() (flag queryOpFlags) {
+func (s *Session) slaveOkFlag() (flag QueryOpFlags) {
 	s.m.RLock()
 	if s.slaveOk {
 		flag = flagSlaveOk
@@ -3542,19 +3543,19 @@ func (q *Query) Count() (n int, err error) {
 	limit := q.limit
 	q.m.Unlock()
 
-	c := strings.Index(op.collection, ".")
+	c := strings.Index(op.Collection, ".")
 	if c < 0 {
-		return 0, errors.New("Bad collection name: " + op.collection)
+		return 0, errors.New("Bad collection name: " + op.Collection)
 	}
 
-	dbname := op.collection[:c]
-	cname := op.collection[c+1:]
-	query := op.query
+	dbname := op.Collection[:c]
+	cname := op.Collection[c+1:]
+	query := op.Query
 	if query == nil {
 		query = bson.D{}
 	}
 	result := struct{ N int }{}
-	err = session.DB(dbname).Run(countCmd{cname, query, limit, op.skip}, &result)
+	err = session.DB(dbname).Run(countCmd{cname, query, limit, op.Skip}, &result)
 	return result.N, err
 }
 
@@ -3586,16 +3587,16 @@ func (q *Query) Distinct(key string, result interface{}) error {
 	op := q.op // Copy.
 	q.m.Unlock()
 
-	c := strings.Index(op.collection, ".")
+	c := strings.Index(op.Collection, ".")
 	if c < 0 {
-		return errors.New("Bad collection name: " + op.collection)
+		return errors.New("Bad collection name: " + op.Collection)
 	}
 
-	dbname := op.collection[:c]
-	cname := op.collection[c+1:]
+	dbname := op.Collection[:c]
+	cname := op.Collection[c+1:]
 
 	var doc struct{ Values bson.Raw }
-	err := session.DB(dbname).Run(distinctCmd{cname, key, op.query}, &doc)
+	err := session.DB(dbname).Run(distinctCmd{cname, key, op.Query}, &doc)
 	if err != nil {
 		return err
 	}
@@ -3716,13 +3717,13 @@ func (q *Query) MapReduce(job *MapReduce, result interface{}) (info *MapReduceIn
 	limit := q.limit
 	q.m.Unlock()
 
-	c := strings.Index(op.collection, ".")
+	c := strings.Index(op.Collection, ".")
 	if c < 0 {
-		return nil, errors.New("Bad collection name: " + op.collection)
+		return nil, errors.New("Bad collection name: " + op.Collection)
 	}
 
-	dbname := op.collection[:c]
-	cname := op.collection[c+1:]
+	dbname := op.Collection[:c]
+	cname := op.Collection[c+1:]
 
 	cmd := mapReduceCmd{
 		Collection: cname,
@@ -3732,8 +3733,8 @@ func (q *Query) MapReduce(job *MapReduce, result interface{}) (info *MapReduceIn
 		Out:        fixMROut(job.Out),
 		Scope:      job.Scope,
 		Verbose:    job.Verbose,
-		Query:      op.query,
-		Sort:       op.options.OrderBy,
+		Query:      op.Query,
+		Sort:       op.Options.OrderBy,
 		Limit:      limit,
 	}
 
@@ -3866,13 +3867,13 @@ func (q *Query) Apply(change Change, result interface{}) (info *ChangeInfo, err 
 	op := q.op // Copy.
 	q.m.Unlock()
 
-	c := strings.Index(op.collection, ".")
+	c := strings.Index(op.Collection, ".")
 	if c < 0 {
-		return nil, errors.New("bad collection name: " + op.collection)
+		return nil, errors.New("bad collection name: " + op.Collection)
 	}
 
-	dbname := op.collection[:c]
-	cname := op.collection[c+1:]
+	dbname := op.Collection[:c]
+	cname := op.Collection[c+1:]
 
 	cmd := findModifyCmd{
 		Collection: cname,
@@ -3880,9 +3881,9 @@ func (q *Query) Apply(change Change, result interface{}) (info *ChangeInfo, err 
 		Upsert:     change.Upsert,
 		Remove:     change.Remove,
 		New:        change.ReturnNew,
-		Query:      op.query,
-		Sort:       op.options.OrderBy,
-		Fields:     op.selector,
+		Query:      op.Query,
+		Sort:       op.Options.OrderBy,
+		Fields:     op.Selector,
 	}
 
 	session = session.Clone()
@@ -4009,7 +4010,7 @@ func (s *Session) acquireSocket(slaveOk bool) (*mongoSocket, error) {
 	}
 
 	// Still not good.  We need a new socket.
-	sock, err := s.cluster().AcquireSocket(slaveOk && s.slaveOk, s.syncTimeout, s.sockTimeout, s.queryConfig.op.serverTags, s.poolLimit)
+	sock, err := s.cluster().AcquireSocket(slaveOk && s.slaveOk, s.syncTimeout, s.sockTimeout, s.queryConfig.op.ServerTags, s.poolLimit)
 	if err != nil {
 		return nil, err
 	}
@@ -4180,8 +4181,8 @@ func (c *Collection) writeQuery(op interface{}) (lerr *LastError, err error) {
 	var replyErr error
 	mutex.Lock()
 	query := *safeOp // Copy the data.
-	query.collection = dbname + ".$cmd"
-	query.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+	query.Collection = dbname + ".$cmd"
+	query.ReplyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
 		replyData = docData
 		replyErr = err
 		mutex.Unlock()
@@ -4196,7 +4197,7 @@ func (c *Collection) writeQuery(op interface{}) (lerr *LastError, err error) {
 	}
 	if hasErrMsg(replyData) {
 		// Looks like getLastError itself failed.
-		err = checkQueryError(query.collection, replyData)
+		err = checkQueryError(query.Collection, replyData)
 		if err != nil {
 			return nil, err
 		}
@@ -4215,7 +4216,7 @@ func (c *Collection) writeCommand(socket *mongoSocket, safeOp *QueryOp, op inter
 	if safeOp == nil {
 		writeConcern = bson.D{{"w", 0}}
 	} else {
-		writeConcern = safeOp.query.(*getLastError)
+		writeConcern = safeOp.Query.(*getLastError)
 	}
 
 	var cmd bson.D

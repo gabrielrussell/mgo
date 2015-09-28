@@ -92,21 +92,21 @@ type QueryWrapper struct {
 }
 
 func (op *QueryOp) finalQuery(socket *mongoSocket) interface{} {
-	if op.flags&flagSlaveOk != 0 && len(op.serverTags) > 0 && socket.ServerInfo().Mongos {
+	if op.Flags&flagSlaveOk != 0 && len(op.ServerTags) > 0 && socket.ServerInfo().Mongos {
 		op.HasOptions = true
-		op.Options.ReadPreference = bson.D{{"mode", "secondaryPreferred"}, {"tags", op.serverTags}}
+		op.Options.ReadPreference = bson.D{{"mode", "secondaryPreferred"}, {"tags", op.ServerTags}}
 	}
 	if op.HasOptions {
-		if op.query == nil {
+		if op.Query == nil {
 			var empty bson.D
-			op.options.Query = empty
+			op.Options.Query = empty
 		} else {
-			op.options.Query = op.query
+			op.Options.Query = op.Query
 		}
-		debugf("final query is %#v\n", &op.options)
-		return &op.options
+		debugf("final query is %#v\n", &op.Options)
+		return &op.Options
 	}
-	return op.query
+	return op.Query
 }
 
 type GetMoreOp struct {
@@ -322,7 +322,7 @@ func (socket *mongoSocket) SimpleQuery(op *QueryOp) (data []byte, replyOp *Reply
 	var replyData []byte
 	var replyErr error
 	wait.Lock()
-	op.replyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+	op.ReplyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
 		change.Lock()
 		if !replyDone {
 			replyDone = true
@@ -398,21 +398,21 @@ func (socket *mongoSocket) Query(ops ...interface{}) (err error) {
 
 		case *QueryOp:
 			buf = addHeader(buf, 2004)
-			buf = addInt32(buf, int32(op.flags))
-			buf = addCString(buf, op.collection)
-			buf = addInt32(buf, op.skip)
-			buf = addInt32(buf, op.limit)
+			buf = addInt32(buf, int32(op.Flags))
+			buf = addCString(buf, op.Collection)
+			buf = addInt32(buf, op.Skip)
+			buf = addInt32(buf, op.Limit)
 			buf, err = addBSON(buf, op.finalQuery(socket))
 			if err != nil {
 				return err
 			}
-			if op.selector != nil {
-				buf, err = addBSON(buf, op.selector)
+			if op.Selector != nil {
+				buf, err = addBSON(buf, op.Selector)
 				if err != nil {
 					return err
 				}
 			}
-			replyFunc = op.replyFunc
+			replyFunc = op.ReplyFunc
 
 		case *GetMoreOp:
 			buf = addHeader(buf, 2005)
