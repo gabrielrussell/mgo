@@ -618,14 +618,51 @@ func (db *Database) Run(cmd interface{}, result interface{}) error {
 }
 
 // I can't remember why I thought I needed this. Oh yea, it's because SimpleQuery is not public
-func (db *Database) QueryOp(op *QueryOp) (data []byte, replyOp *ReplyOp, err error) {
+//func (db *Database) QueryOp(op *QueryOp) (data []byte, replyOp *ReplyOp, err error) {
+//	socket, err := db.Session.acquireSocket(true)
+//	if err != nil {
+//		return nil, nil, err
+//	}
+//	defer socket.Release()
+//
+//	return socket.SimpleQuery(op)
+//}
+
+func (db *Database) QueryOp(op *QueryOp) (data [][]byte, replyOp *ReplyOp, err error) {
+	// I REALLY don't understand this double mutex that Gustavo did. My assumption that you need
+	// two locks for the rece detector to approve of the function.
+	var wait, change sync.Mutex
+	var replyData [][]byte
+	var replyErr error
 	socket, err := db.Session.acquireSocket(true)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer socket.Release()
 
-	return socket.SimpleQuery(op)
+	wait.Lock()
+
+	op.ReplyFunc = func(err error, reply *ReplyOp, docNum int, docData []byte) {
+		change.Lock()
+		replyErr = err
+		replyOp = reply
+		if err == nil {
+			replyData = append(replyData, docData)
+		} else {
+			wait.Unlock()
+		}
+		change.Unlock()
+	}
+	err = socket.Query(op)
+	if err != nil {
+		return nil, nil, err
+	}
+	wait.Lock()
+	change.Lock()
+	data = replyData
+	err = replyErr
+	change.Unlock()
+	return data, replyOp, err
 }
 
 func (db *Database) GetMoreOp(collection string, limit int32, cursorId int64) (data []byte, replyOp *ReplyOp, err error) {
